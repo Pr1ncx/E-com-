@@ -1,7 +1,6 @@
 const express = require('express');
 const cors = require('cors');
-const fs = require('fs');
-const path = require('path');
+const mongoose = require('mongoose');
 require('dotenv').config();
 
 const app = express();
@@ -31,52 +30,109 @@ app.use((req, res, next) => {
   next();
 });
 
-// Database paths
-const DATA_DIR = path.join(__dirname, 'data');
-const USERS_FILE = path.join(DATA_DIR, 'users.json');
-const ORDERS_FILE = path.join(DATA_DIR, 'orders.json');
-const MEMBERS_FILE = path.join(DATA_DIR, 'members.json');
+/* --- MongoDB Connection --- */
+const MONGODB_URI = process.env.MONGODB_URI || 'mongodb://127.0.0.1:27017/aurastore';
 
-// Ensure database files exist
-if (!fs.existsSync(DATA_DIR)) {
-  fs.mkdirSync(DATA_DIR, { recursive: true });
-}
-if (!fs.existsSync(USERS_FILE)) {
-  fs.writeFileSync(USERS_FILE, JSON.stringify([], null, 2));
-}
-if (!fs.existsSync(ORDERS_FILE)) {
-  fs.writeFileSync(ORDERS_FILE, JSON.stringify([], null, 2));
-}
-if (!fs.existsSync(MEMBERS_FILE)) {
-  fs.writeFileSync(MEMBERS_FILE, JSON.stringify([], null, 2));
-}
-
-// Helpers
-const readData = (filePath) => {
+async function connectDB() {
   try {
-    const rawData = fs.readFileSync(filePath, 'utf8');
-    return JSON.parse(rawData);
-  } catch (error) {
-    console.error(`Error reading ${filePath}:`, error);
-    return [];
+    console.log(`Attempting connection to MongoDB at: ${MONGODB_URI}...`);
+    await mongoose.connect(MONGODB_URI, {
+      serverSelectionTimeoutMS: 3000
+    });
+    console.log('Successfully connected to MongoDB.');
+    await seedProducts();
+  } catch (err) {
+    console.warn(`Could not connect to MongoDB at ${MONGODB_URI} (${err.message}). Falling back to in-memory MongoDB...`);
+    try {
+      const { MongoMemoryServer } = require('mongodb-memory-server');
+      const mongoServer = await MongoMemoryServer.create();
+      const inMemoryUri = mongoServer.getUri();
+      console.log(`Spinning up in-memory MongoDB server...`);
+      
+      await mongoose.disconnect();
+      await mongoose.connect(inMemoryUri);
+      console.log(`Successfully connected to in-memory MongoDB at ${inMemoryUri}`);
+      await seedProducts();
+    } catch (inMemoryErr) {
+      console.error('Fatal: Failed to connect to both external and in-memory MongoDB:', inMemoryErr);
+    }
   }
-};
+}
 
-const writeData = (filePath, data) => {
-  try {
-    fs.writeFileSync(filePath, JSON.stringify(data, null, 2));
-    return true;
-  } catch (error) {
-    console.error(`Error writing ${filePath}:`, error);
-    return false;
-  }
-};
+connectDB();
 
-// Catalog database with stock values for Inventory Management
-let PRODUCTS = [
+/* --- Mongoose Schemas & Models --- */
+
+// Product Model
+const ProductSchema = new mongoose.Schema({
+  id: { type: String, required: true, unique: true },
+  title: { type: String, required: true },
+  price: { type: String, required: true },
+  priceVal: { type: Number, required: true },
+  category: { type: String, required: true },
+  image: { type: String, required: true },
+  rating: { type: Number, default: 0 },
+  reviews: { type: Number, default: 0 },
+  stock: { type: Number, default: 0 },
+  desc: { type: String, required: true }
+});
+
+const Product = mongoose.model('Product', ProductSchema);
+
+// User Model
+const UserSchema = new mongoose.Schema({
+  id: { type: String, unique: true, default: () => `user-${Date.now()}-${Math.floor(Math.random() * 1000)}` },
+  name: { type: String, required: true },
+  email: { type: String, required: true, unique: true, lowercase: true },
+  password: { type: String, required: true } // Stored in plain text for demonstration/continuity
+});
+
+const User = mongoose.model('User', UserSchema);
+
+// Order Model
+const OrderSchema = new mongoose.Schema({
+  orderId: { type: String, required: true, unique: true },
+  customer: {
+    name: { type: String, required: true },
+    email: { type: String, required: true, lowercase: true },
+    address: { type: String, required: true },
+    city: { type: String, required: true },
+    zip: { type: String, required: true }
+  },
+  items: [
+    {
+      id: { type: String, required: true },
+      title: { type: String, required: true },
+      price: { type: String, required: true },
+      quantity: { type: Number, required: true }
+    }
+  ],
+  totals: {
+    subtotal: { type: Number, required: true },
+    discount: { type: Number, default: 0 },
+    total: { type: Number, required: true }
+  },
+  couponCode: { type: String, default: null },
+  status: { type: String, default: 'Processed & Shipped (Glow Logistics)' },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Order = mongoose.model('Order', OrderSchema);
+
+// Newsletter Member Model
+const MemberSchema = new mongoose.Schema({
+  id: { type: String, default: () => `news-${Date.now()}` },
+  email: { type: String, required: true, unique: true, lowercase: true },
+  createdAt: { type: Date, default: Date.now }
+});
+
+const Member = mongoose.model('Member', MemberSchema);
+
+// Default Products Catalog to Seed Database
+const INITIAL_PRODUCTS = [
   {
     id: 'aurelia-chrono',
-    title: 'Aurum Chronograph Watch',
+    title: 'Raldo Watch',
     price: '₹4,999.00',
     priceVal: 4999,
     category: 'Accessories',
@@ -268,18 +324,40 @@ let PRODUCTS = [
   }
 ];
 
+// Seed function
+async function seedProducts() {
+  try {
+    const count = await Product.countDocuments();
+    if (count === 0) {
+      console.log('Seeding products database with default products catalog...');
+      await Product.insertMany(INITIAL_PRODUCTS);
+      console.log('Products catalog successfully seeded!');
+    }
+  } catch (error) {
+    console.error('Error seeding products:', error);
+  }
+}
+
 /* --- API Endpoints --- */
 
 // Get Products Catalog
-app.get('/api/products', (req, res) => {
-  res.status(200).json({
-    success: true,
-    data: PRODUCTS
-  });
+app.get('/api/products', async (req, res) => {
+  try {
+    const products = await Product.find({});
+    res.status(200).json({
+      success: true,
+      data: products
+    });
+  } catch (error) {
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve products catalog.'
+    });
+  }
 });
 
 // Authentication: SignUp
-app.post('/api/auth/signup', (req, res) => {
+app.post('/api/auth/signup', async (req, res) => {
   const { name, email, password } = req.body;
 
   if (!name || !email || !password) {
@@ -289,27 +367,24 @@ app.post('/api/auth/signup', (req, res) => {
     });
   }
 
-  const users = readData(USERS_FILE);
-  const exists = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  try {
+    const exists = await User.findOne({ email: email.toLowerCase() });
 
-  if (exists) {
-    return res.status(409).json({
-      success: false,
-      message: 'An account with this email is already registered.'
+    if (exists) {
+      return res.status(409).json({
+        success: false,
+        message: 'An account with this email is already registered.'
+      });
+    }
+
+    const newUser = new User({
+      name,
+      email: email.toLowerCase(),
+      password
     });
-  }
 
-  const newUser = {
-    id: `user-${Date.now()}`,
-    name,
-    email: email.toLowerCase(),
-    password // basic password storage for demonstration
-  };
+    await newUser.save();
 
-  users.push(newUser);
-  const success = writeData(USERS_FILE, users);
-
-  if (success) {
     res.status(201).json({
       success: true,
       message: 'Account successfully registered.',
@@ -319,7 +394,8 @@ app.post('/api/auth/signup', (req, res) => {
         email: newUser.email
       }
     });
-  } else {
+  } catch (error) {
+    console.error('SignUp Error:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to register account.'
@@ -328,7 +404,7 @@ app.post('/api/auth/signup', (req, res) => {
 });
 
 // Authentication: Login
-app.post('/api/auth/login', (req, res) => {
+app.post('/api/auth/login', async (req, res) => {
   const { email, password } = req.body;
 
   if (!email || !password) {
@@ -338,29 +414,36 @@ app.post('/api/auth/login', (req, res) => {
     });
   }
 
-  const users = readData(USERS_FILE);
-  const user = users.find(u => u.email.toLowerCase() === email.toLowerCase());
+  try {
+    const user = await User.findOne({ email: email.toLowerCase() });
 
-  if (!user || user.password !== password) {
-    return res.status(401).json({
+    if (!user || user.password !== password) {
+      return res.status(401).json({
+        success: false,
+        message: 'Invalid email coordinates or password combination.'
+      });
+    }
+
+    res.status(200).json({
+      success: true,
+      message: 'Login successful.',
+      data: {
+        id: user.id,
+        name: user.name,
+        email: user.email
+      }
+    });
+  } catch (error) {
+    console.error('Login Error:', error);
+    res.status(500).json({
       success: false,
-      message: 'Invalid email coordinates or password combination.'
+      message: 'Login failed.'
     });
   }
-
-  res.status(200).json({
-    success: true,
-    message: 'Login successful.',
-    data: {
-      id: user.id,
-      name: user.name,
-      email: user.email
-    }
-  });
 });
 
 // Post Order Checkout (Inventory reduction rules applied)
-app.post('/api/orders', (req, res) => {
+app.post('/api/orders', async (req, res) => {
   const { customer, items, subtotal, discount, total, couponCode } = req.body;
 
   if (!customer || !items || !Array.isArray(items) || items.length === 0) {
@@ -370,65 +453,66 @@ app.post('/api/orders', (req, res) => {
     });
   }
 
-  // Inventory Management: Verify stock levels and reduce
-  for (const orderItem of items) {
-    const catalogItem = PRODUCTS.find(p => p.id === orderItem.id);
-    if (!catalogItem) {
-      return res.status(404).json({
-        success: false,
-        message: `Product ${orderItem.title} not found in store database.`
-      });
+  try {
+    // 1. Verify stock levels for all products first
+    const productUpdates = [];
+    for (const orderItem of items) {
+      const product = await Product.findOne({ id: orderItem.id });
+      if (!product) {
+        return res.status(404).json({
+          success: false,
+          message: `Product ${orderItem.title} not found in store database.`
+        });
+      }
+      if (product.stock < orderItem.quantity) {
+        return res.status(409).json({
+          success: false,
+          message: `Insufficient stock for ${product.title}. Only ${product.stock} items remaining.`
+        });
+      }
+      productUpdates.push({ product, quantity: orderItem.quantity });
     }
-    if (catalogItem.stock < orderItem.quantity) {
-      return res.status(409).json({
-        success: false,
-        message: `Insufficient stock for ${catalogItem.title}. Only ${catalogItem.stock} items remaining.`
-      });
+
+    // 2. Deduct stock in DB
+    for (const update of productUpdates) {
+      update.product.stock -= update.quantity;
+      await update.product.save();
     }
-  }
 
-  // Deduct stock
-  items.forEach(orderItem => {
-    const catalogItem = PRODUCTS.find(p => p.id === orderItem.id);
-    catalogItem.stock -= orderItem.quantity;
-  });
+    // 3. Create the order
+    const newOrder = new Order({
+      orderId: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
+      customer: {
+        name: customer.name,
+        email: customer.email.toLowerCase(),
+        address: customer.address,
+        city: customer.city,
+        zip: customer.zip
+      },
+      items: items.map(i => ({
+        id: i.id,
+        title: i.title,
+        price: i.price,
+        quantity: i.quantity
+      })),
+      totals: {
+        subtotal,
+        discount: discount || 0,
+        total
+      },
+      couponCode: couponCode || null,
+      status: 'Processed & Shipped (Glow Logistics)'
+    });
 
-  const orders = readData(ORDERS_FILE);
-  const newOrder = {
-    orderId: `ORD-${Date.now()}-${Math.floor(Math.random() * 1000)}`,
-    customer: {
-      name: customer.name,
-      email: customer.email,
-      address: customer.address,
-      city: customer.city,
-      zip: customer.zip
-    },
-    items: items.map(i => ({
-      id: i.id,
-      title: i.title,
-      price: i.price,
-      quantity: i.quantity
-    })),
-    totals: {
-      subtotal,
-      discount: discount || 0,
-      total
-    },
-    couponCode: couponCode || null,
-    status: 'Processed & Shipped (Glow Logistics)',
-    createdAt: new Date().toISOString()
-  };
+    await newOrder.save();
 
-  orders.push(newOrder);
-  const success = writeData(ORDERS_FILE, orders);
-
-  if (success) {
     res.status(201).json({
       success: true,
       message: 'Order registered successfully and stock allocated.',
       data: newOrder
     });
-  } else {
+  } catch (error) {
+    console.error('[Orders] Error processing order:', error);
     res.status(500).json({
       success: false,
       message: 'Failed to save order details.'
@@ -436,8 +520,34 @@ app.post('/api/orders', (req, res) => {
   }
 });
 
+// Get Order History for a specific User
+app.get('/api/orders/history', async (req, res) => {
+  const email = req.query.email || req.headers['x-authenticated-user-email'];
+
+  if (!email) {
+    return res.status(400).json({
+      success: false,
+      message: 'Email parameter or X-Authenticated-User-Email header is required.'
+    });
+  }
+
+  try {
+    const userOrders = await Order.find({ 'customer.email': email.toLowerCase() });
+    res.status(200).json({
+      success: true,
+      data: userOrders
+    });
+  } catch (error) {
+    console.error('[OrderHistory] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to retrieve order history.'
+    });
+  }
+});
+
 // Post Newsletter Join
-app.post('/api/members', (req, res) => {
+app.post('/api/members', async (req, res) => {
   const { email } = req.body;
 
   if (!email) {
@@ -447,29 +557,31 @@ app.post('/api/members', (req, res) => {
     });
   }
 
-  const members = readData(MEMBERS_FILE);
-  const existing = members.find(m => m.email.toLowerCase() === email.toLowerCase());
-  
-  if (existing) {
-    return res.status(200).json({
+  try {
+    const existing = await Member.findOne({ email: email.toLowerCase() });
+    if (existing) {
+      return res.status(200).json({
+        success: true,
+        message: 'Email already registered.'
+      });
+    }
+
+    const newJoin = new Member({
+      email: email.toLowerCase()
+    });
+    await newJoin.save();
+
+    res.status(201).json({
       success: true,
-      message: 'Email already registered.'
+      message: 'Subscription successful. Welcome to AuraStore newsletter circle.'
+    });
+  } catch (error) {
+    console.error('[Newsletter] Error:', error);
+    res.status(500).json({
+      success: false,
+      message: 'Failed to subscribe email.'
     });
   }
-
-  const newJoin = {
-    id: `news-${Date.now()}`,
-    email,
-    createdAt: new Date().toISOString()
-  };
-
-  members.push(newJoin);
-  writeData(MEMBERS_FILE, members);
-
-  res.status(201).json({
-    success: true,
-    message: 'Subscription successful. Welcome to AuraStore newsletter circle.'
-  });
 });
 
 app.listen(PORT, () => {

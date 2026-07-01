@@ -10,13 +10,14 @@ import CartDrawer from './components/CartDrawer';
 import ProductDetailModal from './components/ProductDetailModal';
 import CheckoutWizard from './components/CheckoutWizard';
 import AuthModal from './components/AuthModal';
-import ApiInterceptorConsole from './components/ApiInterceptorConsole';
+import OrderHistoryModal from './components/OrderHistoryModal';
 
 export default function App() {
   const [searchQuery, setSearchQuery] = useState('');
   const [selectedCategory, setSelectedCategory] = useState('All');
   const [activeQuickViewProduct, setActiveQuickViewProduct] = useState(null);
   const [isCheckoutOpen, setIsCheckoutOpen] = useState(false);
+  const [isOrderHistoryOpen, setIsOrderHistoryOpen] = useState(false);
 
   return (
     <AuthProvider>
@@ -28,6 +29,7 @@ export default function App() {
             setSearchQuery={setSearchQuery}
             selectedCategory={selectedCategory}
             setSelectedCategory={setSelectedCategory}
+            onOpenOrderHistory={() => setIsOrderHistoryOpen(true)}
           />
 
           <main>
@@ -68,8 +70,12 @@ export default function App() {
           {/* Login and Signup modal */}
           <AuthModal />
 
-          {/* API Developer Interceptor Console Widget */}
-          <ApiInterceptorConsole />
+          {/* Order history list modal */}
+          <OrderHistoryModal
+            isOpen={isOrderHistoryOpen}
+            onClose={() => setIsOrderHistoryOpen(false)}
+          />
+
         </div>
       </BagProvider>
     </AuthProvider>

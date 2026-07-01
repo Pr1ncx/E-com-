@@ -4,7 +4,7 @@ import { useAuth } from '../context/AuthContext';
 
 const CATEGORIES = ['All', 'Accessories', 'Scent', 'Optics', 'Tech', 'Home', 'Apparel'];
 
-export default function Header({ searchQuery, setSearchQuery, selectedCategory, setSelectedCategory }) {
+export default function Header({ searchQuery, setSearchQuery, selectedCategory, setSelectedCategory, onOpenOrderHistory }) {
   const { getItemsCount, setIsBagOpen } = useBag();
   const { currentUser, logoutUser, setIsAuthModalOpen } = useAuth();
 
@@ -51,20 +51,39 @@ export default function Header({ searchQuery, setSearchQuery, selectedCategory, 
               </div>
               <div className="hidden lg:block text-left text-xs">
                 <p className="font-bold text-zinc-800 line-clamp-1">{currentUser.name}</p>
+                <div className="flex items-center gap-1.5 mt-0.5">
+                  <button
+                    onClick={onOpenOrderHistory}
+                    className="text-zinc-500 hover:text-indigo-600 font-semibold"
+                  >
+                    Orders
+                  </button>
+                  <span className="text-zinc-300">•</span>
+                  <button
+                    onClick={logoutUser}
+                    className="text-zinc-400 hover:text-rose-600 font-semibold"
+                  >
+                    Sign Out
+                  </button>
+                </div>
+              </div>
+              <div className="lg:hidden flex items-center gap-1 text-xs">
+                <button
+                  onClick={onOpenOrderHistory}
+                  className="text-zinc-500 hover:text-indigo-600 font-bold px-1.5 py-1"
+                  aria-label="Orders"
+                >
+                  Orders
+                </button>
+                <span className="text-zinc-300">•</span>
                 <button
                   onClick={logoutUser}
-                  className="text-zinc-400 hover:text-indigo-600 font-semibold"
+                  className="text-zinc-400 hover:text-rose-600 font-bold px-1.5 py-1"
+                  aria-label="Logout"
                 >
                   Sign Out
                 </button>
               </div>
-              <button
-                onClick={logoutUser}
-                className="lg:hidden text-xs text-zinc-400 hover:text-indigo-600 font-bold px-2 py-1"
-                aria-label="Logout"
-              >
-                Sign Out
-              </button>
             </div>
           ) : (
             <button
